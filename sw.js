@@ -1,43 +1,42 @@
 // TEDxFDU Dashboard — Service Worker
 // Cache-first for assets, network-first for navigation
+// Supabase API calls always bypass cache
 
-const CACHE = 'tedx-v1'
+const CACHE = 'tedx-v2'
 
-// Pre-cache everything on install
+// Hosts that should never be cached (live data / sync)
+const PASSTHROUGH_HOSTS = ['supabase.co', 'supabase.com']
+
 self.addEventListener('install', (e) => {
   e.waitUntil(
-    caches.open(CACHE).then((cache) =>
-      cache.addAll(['/'])
-    ).then(() => self.skipWaiting())
+    caches.open(CACHE).then((cache) => cache.addAll(['/'])).then(() => self.skipWaiting())
   )
 })
 
-// Clean up old caches on activate
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   )
 })
 
-// Fetch strategy:
-// - Navigation requests → network first, fall back to cache (offline shell)
-// - Everything else → cache first, fall back to network
 self.addEventListener('fetch', (e) => {
   const { request } = e
   const url = new URL(request.url)
 
-  // Only handle same-origin requests
+  // Never cache Supabase or other live API calls — let them pass through
+  if (PASSTHROUGH_HOSTS.some((h) => url.hostname.endsWith(h))) return
+
+  // Only cache same-origin requests
   if (url.origin !== self.location.origin) return
 
   if (request.mode === 'navigate') {
-    // Network-first for HTML navigation
+    // Network-first for HTML navigation, fall back to cached shell offline
     e.respondWith(
       fetch(request)
         .then((res) => {
-          const clone = res.clone()
-          caches.open(CACHE).then((c) => c.put(request, clone))
+          caches.open(CACHE).then((c) => c.put(request, res.clone()))
           return res
         })
         .catch(() => caches.match('/'))
@@ -49,8 +48,7 @@ self.addEventListener('fetch', (e) => {
         (cached) =>
           cached ??
           fetch(request).then((res) => {
-            const clone = res.clone()
-            caches.open(CACHE).then((c) => c.put(request, clone))
+            caches.open(CACHE).then((c) => c.put(request, res.clone()))
             return res
           })
       )
